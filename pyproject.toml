@@ -1,0 +1,13 @@
+# pyproject.toml
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hpcprobe"
+version = "0.4.0"
+description = "HPC Administration & Monitoring"
+requires-python = ">=3.9"
+
+[project.scripts]
+hpcprobe = "hpcprobe.cli:main"
