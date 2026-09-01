@@ -86,28 +86,39 @@ def _summarize_gpu(state: Dict[str, Dict[str, Any]]) -> Tuple[Dict[str, Dict], D
     nodes: Dict[str, Dict[str, Any]] = {}
     all_utils: List[float] = []
     all_temps: List[float] = []
-    c = {"gpus": 0, "power_w": 0.0, "mem_used_gb": 0.0, "mem_total_gb": 0.0}
+    c = {"gpus": 0, "gpus_unreadable": 0, "power_w": 0.0,
+         "mem_used_gb": 0.0, "mem_total_gb": 0.0}
 
     for node, nd in state.items():
         if "error" in nd:
             continue
         gpus = nd.get("gpus", [])
-        if not gpus:
+        # A faulted GPU reads None, which _f() would turn into 0% and 0C -
+        # dragging the average down and hiding the fault. Aggregate the
+        # healthy ones and carry the rest as a count.
+        healthy = [g for g in gpus if g.get("status", "ok") == "ok"]
+        unreadable = len(gpus) - len(healthy)
+
+        if not healthy:
             nodes[node] = _round({
-                "gpus": 0, "util_avg": 0.0, "util_max": 0.0, "temp_max": 0.0,
+                "gpus": len(gpus), "gpus_unreadable": unreadable,
+                "util_avg": 0.0, "util_max": 0.0, "temp_max": 0.0,
                 "power_w": 0.0, "mem_used_gb": 0.0, "mem_total_gb": 0.0,
                 "mem_used_pct": 0.0,
             })
+            c["gpus"] += len(gpus)
+            c["gpus_unreadable"] += unreadable
             continue
 
-        utils = [_f(g.get("util_pct")) for g in gpus]
-        temps = [_f(g.get("temp_c")) for g in gpus]
-        power = sum(_f(g.get("power_w")) for g in gpus)
-        used_gb = sum(_f(g.get("mem_used_mb")) for g in gpus) / 1024.0
-        total_gb = sum(_f(g.get("mem_total_mb")) for g in gpus) / 1024.0
+        utils = [_f(g.get("util_pct")) for g in healthy]
+        temps = [_f(g.get("temp_c")) for g in healthy]
+        power = sum(_f(g.get("power_w")) for g in healthy)
+        used_gb = sum(_f(g.get("mem_used_mb")) for g in healthy) / 1024.0
+        total_gb = sum(_f(g.get("mem_total_mb")) for g in healthy) / 1024.0
 
         nodes[node] = _round({
             "gpus": len(gpus),
+            "gpus_unreadable": unreadable,
             "util_avg": _avg(utils),
             "util_max": max(utils),
             "temp_max": max(temps),
@@ -120,12 +131,14 @@ def _summarize_gpu(state: Dict[str, Dict[str, Any]]) -> Tuple[Dict[str, Dict], D
         all_utils.extend(utils)
         all_temps.extend(temps)
         c["gpus"] += len(gpus)
+        c["gpus_unreadable"] += unreadable
         c["power_w"] += power
         c["mem_used_gb"] += used_gb
         c["mem_total_gb"] += total_gb
 
     cluster = _round({
         "gpus": c["gpus"],
+        "gpus_unreadable": c["gpus_unreadable"],
         # Averaged over every GPU, not over nodes, so heterogeneous nodes
         # (4 GPUs vs 8 GPUs) don't get equal weight in the cluster figure.
         "util_avg": _avg(all_utils),

@@ -1,3 +1,5 @@
+import csv
+import io
 import json
 import unittest
 
@@ -104,9 +106,15 @@ class ErrorNodeHandlingTests(unittest.TestCase):
 
     def test_csv_gpu_error_row_has_no_gpu_fields(self):
         state = {"node01": {"error": "timeout"}}
-        rows = csv_out.render(state, module="gpus").splitlines()
+        rows = list(csv.reader(io.StringIO(csv_out.render(state, module="gpus"))))
         self.assertEqual(len(rows), 2)  # header + one error row
-        self.assertTrue(rows[1].endswith(",timeout"))
+        header, row = rows
+        # By column name, not position: Status/PCI_Bus_ID were appended after
+        # Error, so "last field" is no longer a stand-in for "the error".
+        self.assertEqual(row[header.index("Error")], "timeout")
+        for col in ("GPU_Index", "Model", "Util_Pct", "Mem_Used_MB",
+                    "Mem_Total_MB", "Temp_C", "Power_W"):
+            self.assertEqual(row[header.index(col)], "")
 
     def test_prometheus_skips_error_nodes_entirely(self):
         state = {"node01": {"error": "timeout"}}
@@ -117,6 +125,34 @@ class ErrorNodeHandlingTests(unittest.TestCase):
         out = prometheus_out.render(state, module="gpus")
         self.assertIn('node="node01"', out)
         self.assertNotIn("node02", out)
+
+
+
+
+class GpuUnreadableFieldTests(unittest.TestCase):
+    """A faulted GPU carries None metrics; no formatter may emit that as a
+    number, and none may render it as a healthy zero."""
+
+    BAD = {"node01": {"gpus": [{
+        "index": 4, "model": "H200", "pci_bus_id": "00000000:BA:00.0",
+        "status": "unreadable", "util_pct": None, "mem_used_mb": None,
+        "mem_total_mb": None, "temp_c": None, "power_w": None,
+    }]}}
+
+    def test_prometheus_omits_unreadable_series_and_marks_gpu_down(self):
+        out = prometheus_out.render(self.BAD, module="gpus")
+        self.assertNotIn("None", out)
+        self.assertNotIn("hpcprobe_gpu_utilization_percent{", out)
+        self.assertIn("hpcprobe_gpu_up{", out)
+        self.assertTrue(out.rstrip().endswith(" 0.0"))
+
+    def test_csv_leaves_unreadable_cells_empty_not_zero(self):
+        rows = list(csv.reader(io.StringIO(csv_out.render(self.BAD, module="gpus"))))
+        header, row = rows
+        self.assertEqual(row[header.index("Status")], "unreadable")
+        self.assertEqual(row[header.index("PCI_Bus_ID")], "00000000:BA:00.0")
+        for col in ("Util_Pct", "Mem_Used_MB", "Temp_C", "Power_W"):
+            self.assertEqual(row[header.index(col)], "")
 
 
 if __name__ == "__main__":
