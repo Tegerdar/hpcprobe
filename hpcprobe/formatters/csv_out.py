@@ -10,18 +10,25 @@ def render(data: Dict[str, Any], module: str) -> str:
     writer = csv.writer(output)
 
     if module in ("gpus", "gpu"):
+        # Status/PCI_Bus_ID appended, not inserted, so positional consumers
+        # of the existing nine columns keep working.
         writer.writerow([
             "Node", "GPU_Index", "Model", "Util_Pct",
-            "Mem_Used_MB", "Mem_Total_MB", "Temp_C", "Power_W", "Error"
+            "Mem_Used_MB", "Mem_Total_MB", "Temp_C", "Power_W", "Error",
+            "Status", "PCI_Bus_ID"
         ])
         for node, node_data in sorted(data.items()):
             if "error" in node_data:
-                writer.writerow([node, "", "", "", "", "", "", "", node_data["error"]])
+                writer.writerow([node, "", "", "", "", "", "", "", node_data["error"],
+                                 "node_error", ""])
                 continue
             for gpu in node_data.get("gpus", []):
                 writer.writerow([
-                    node, gpu["index"], gpu["model"], gpu["util_pct"],
-                    gpu["mem_used_mb"], gpu["mem_total_mb"], gpu["temp_c"], gpu["power_w"], ""
+                    node, gpu["index"], gpu["model"],
+                    # None -> empty cell, distinguishable from a genuine 0
+                    *("" if gpu.get(k) is None else gpu[k] for k in
+                      ("util_pct", "mem_used_mb", "mem_total_mb", "temp_c", "power_w")),
+                    "", gpu.get("status", "ok"), gpu.get("pci_bus_id", "")
                 ])
 
     elif module == "cpu":

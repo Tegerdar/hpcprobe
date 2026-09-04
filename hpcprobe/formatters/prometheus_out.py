@@ -40,24 +40,33 @@ def render(data: Dict[str, Any], module: str) -> str:
 
     # GPU section: per-GPU metrics, one label set per (node, gpu_index)
     if module in ("gpus", "gpu"):
-        util, mem_used, mem_tot, temp, pwr = [], [], [], [], []
+        util, mem_used, mem_tot, temp, pwr, up = [], [], [], [], [], []
 
         for node, node_data in data.items():
             if "error" in node_data:
                 continue
             for gpu in node_data.get("gpus", []):
                 lbl = f'node="{_lbl(node)}",gpu_index="{_lbl(gpu["index"])}",model="{_lbl(gpu["model"])}"'
-                util.append((lbl, gpu["util_pct"]))
-                mem_used.append((lbl, gpu["mem_used_mb"] * 1048576))  # MB -> Bytes
-                mem_tot.append((lbl, gpu["mem_total_mb"] * 1048576))
-                temp.append((lbl, gpu["temp_c"]))
-                pwr.append((lbl, gpu["power_w"]))
+                # 1/0 rather than absence: an alert can fire on == 0, but
+                # cannot fire on a series that stopped being exported.
+                up.append((lbl, 1.0 if gpu.get("status", "ok") == "ok" else 0.0))
+                for bucket, key, scale in (
+                    (util, "util_pct", 1.0),
+                    (mem_used, "mem_used_mb", 1048576.0),  # MB -> Bytes
+                    (mem_tot, "mem_total_mb", 1048576.0),
+                    (temp, "temp_c", 1.0),
+                    (pwr, "power_w", 1.0),
+                ):
+                    value = gpu.get(key)
+                    if value is not None:  # never export a placeholder as 0
+                        bucket.append((lbl, value * scale))
 
         add_metric("hpcprobe_gpu_utilization_percent", "GPU Utilization %", "gauge", util)
         add_metric("hpcprobe_gpu_memory_used_bytes", "GPU Memory Used (Bytes)", "gauge", mem_used)
         add_metric("hpcprobe_gpu_memory_total_bytes", "GPU Memory Total (Bytes)", "gauge", mem_tot)
         add_metric("hpcprobe_gpu_temperature_celsius", "GPU Temperature (C)", "gauge", temp)
         add_metric("hpcprobe_gpu_power_draw_watts", "GPU Power Draw (W)", "gauge", pwr)
+        add_metric("hpcprobe_gpu_up", "1 if every GPU metric was readable", "gauge", up)
 
     # CPU section: export per-node metrics (do not assume local hostname)
     elif module in ("cpu", "cpus"):
@@ -245,6 +254,7 @@ _GB = 1024.0 * 1024.0 * 1024.0
 SUMMARY_METRICS: Dict[str, List[Tuple[str, str, str, str, float]]] = {
     "gpu": [
         ("gpus", "gpus_total", "GPUs present", "gauge", 1.0),
+        ("gpus_unreadable", "unreadable_total", "GPUs with unreadable metrics", "gauge", 1.0),
         ("util_avg", "utilization_percent_avg", "Mean GPU utilization", "gauge", 1.0),
         ("util_max", "utilization_percent_max", "Busiest GPU utilization", "gauge", 1.0),
         ("temp_max", "temperature_celsius_max", "Hottest GPU temperature", "gauge", 1.0),
